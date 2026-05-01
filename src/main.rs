@@ -4,6 +4,8 @@ use winit::{
     application::ApplicationHandler, event::WindowEvent, event_loop::EventLoop, window::Window
 };
 
+use crate::render::Render;
+
 
 mod vkstate;
 mod render;
@@ -11,7 +13,7 @@ mod render;
 #[derive(Default)]
 struct App {
     window : Option<Arc<Window>>,
-    vkstate : Option<vkstate::State>,
+    render : Option<Render>,
 }
 
 impl ApplicationHandler for App {
@@ -27,15 +29,14 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => {
                 println!("[App] close");
                 
-                unsafe {
-                    self.vkstate.as_ref().unwrap().device.wait_idle().unwrap();
-                }
-                
-                let _ = self.vkstate.take();
                 event_loop.exit();
             },
             WindowEvent::RedrawRequested => {
                 // todo: draw logic
+                //
+                let render = self.render.as_mut().unwrap();
+                render.draw_frame();
+                
                 self.window.as_ref().unwrap().request_redraw();
             },
             _ => {},
@@ -46,8 +47,10 @@ impl ApplicationHandler for App {
         self.window = Some(Arc::new(event_loop.create_window(Window::default_attributes()).unwrap()));
         
         let resolution = self.window.as_ref().unwrap().inner_size();
+        let vkstate = vkstate::State::new_for_rendering(self.window.as_ref().unwrap().clone(), [resolution.width, resolution.height]);
         
-        self.vkstate = Some(vkstate::State::new_for_rendering(self.window.as_ref().unwrap().clone(), [resolution.width, resolution.height]));
+
+        self.render = Some(Render::new(vkstate));
     }
 }
 
