@@ -1,0 +1,14 @@
+[package]
+name = "tinyrender"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nalgebra = "*"
+image = "*"
+rand = "*"
+winit = "*"
+vulkano = "*"
+
+[profile.release]
+debug = true
