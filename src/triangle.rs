@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{cell::RefCell, collections::HashSet, sync::Arc, sync::Mutex};
 
-use vulkano::{device::DeviceOwned, pipeline::{GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo, graphics::{GraphicsPipelineCreateInfo, viewport}}, render_pass::{RenderPass, Subpass}};
+use vulkano::{device::DeviceOwned, pipeline::{self, DynamicState, GraphicsPipeline, Pipeline, PipelineLayout, PipelineShaderStageCreateInfo, graphics::{GraphicsPipelineCreateInfo, viewport}}, render_pass::{RenderPass, Subpass}};
 
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 
@@ -24,13 +24,18 @@ mod ps {
     }
 }
 
+use crate::render::{self, Render, subpass_node::RenderSubpass};
+use crate::render::subpass_node::SubpassHandle;
+
 pub struct TrianglePass {
-    pub pipeline : Arc<GraphicsPipeline>
+    pub pipeline : Arc<GraphicsPipeline>,
+    pub handle : SubpassHandle,
+    pub tri_color : Arc<Mutex<[f32; 4]>>,
 }
 
 impl TrianglePass {
-    pub fn new(rp : Arc<RenderPass>) -> Self {
-        let device = rp.device();
+    pub fn new(renderer : &Render) -> Self {
+        let device = renderer.get_device();
         let vshader = vs::load(device.clone()).unwrap();
         let pshader = ps::load(device.clone()).unwrap();
         
@@ -46,14 +51,15 @@ impl TrianglePass {
                 .unwrap(),
         ).unwrap();
         
-        let subpass = Subpass::from(rp.clone(), 0).unwrap();
+        let subpass = Subpass::from(renderer.get_main_renderpass().clone(), 0).unwrap();
         let viewport = Viewport {
             offset: [0.0, 0.0],
             extent: [640.0, 480.0],
             depth_range: 0.0..=1.0,
         };
-
-        let info = GraphicsPipelineCreateInfo {
+        
+            
+        let mut info = GraphicsPipelineCreateInfo {
             stages : stages.into_iter().collect(),
             vertex_input_state : Some(Default::default()),
             input_assembly_state : Some(Default::default()),
@@ -65,13 +71,29 @@ impl TrianglePass {
             color_blend_state: Some(ColorBlendState::with_attachment_states(
                 subpass.num_color_attachments(),
                 ColorBlendAttachmentState::default(),
-            )),
+            )), 
             subpass: Some(subpass.into()),
             ..GraphicsPipelineCreateInfo::layout(layout)
         };
+        
+        info.dynamic_state.insert(DynamicState::Viewport);
 
-        let pipeline = GraphicsPipeline::new(device.clone(), None, info).unwrap();
-        Self { pipeline }
+        let pipeline_orig = GraphicsPipeline::new(device.clone(), None, info).unwrap();
+        
+        let tri_color_orig = Arc::new(Mutex::new([1f32, 0f32, 0f32, 1f32]));
+
+        let pipeline = pipeline_orig.clone();
+        let tri_color = tri_color_orig.clone(); 
+
+        let hndl = renderer.register_node(RenderSubpass::Normal, String::from("triangle"), move |cmd, ctx| { 
+            cmd.set_viewport(0, vec![ctx.viewport.clone()].into()).unwrap();
+            cmd.bind_pipeline_graphics(pipeline.clone()).unwrap();
+            cmd.push_constants(pipeline.layout().clone(), 0, *tri_color.lock().unwrap()).unwrap();
+            unsafe { cmd.draw(3, 1, 0, 0).unwrap() };
+        });
+        
+
+        Self { pipeline : pipeline_orig, handle : hndl, tri_color : tri_color_orig }
     }
 }
 

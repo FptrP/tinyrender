@@ -1,8 +1,9 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use winit::{
     application::ApplicationHandler, dpi::{PhysicalSize, Size}, event::WindowEvent, event_loop::EventLoop, window::{Window, WindowAttributes}
 };
+
 
 use crate::render::Render;
 
@@ -16,6 +17,7 @@ struct App {
     window : Option<Arc<Window>>,
     render : Option<Render>,
     tri : Option<triangle::TrianglePass>,
+    app_start : Option<std::time::Instant>,
 }
 
 impl ApplicationHandler for App {
@@ -40,14 +42,15 @@ impl ApplicationHandler for App {
                 let window = self.window.as_ref().unwrap();
                 
                 let tri = self.tri.as_ref().unwrap();
+                let elapsed_s = self.app_start.as_ref().unwrap().elapsed().as_secs_f32();
 
-                render.draw_frame(|cmd| {
-                    //
-                    cmd.bind_pipeline_graphics(tri.pipeline.clone());
-                    unsafe {
-                        cmd.draw(3, 1, 0, 0).unwrap();
-                    }
-                });
+                {
+                    let mut color = tri.tri_color.lock().unwrap();
+                    color[0] = 0.5 * f32::cos(elapsed_s) + 0.5;
+                    color[1] = 0.5 * f32::sin(elapsed_s) + 0.5; 
+                }
+
+                render.draw_frame();
                 
                 if render.recreate_swapchain {
                     let res = [window.inner_size().width,
@@ -75,8 +78,10 @@ impl ApplicationHandler for App {
         self.render = Some(Render::new(vkstate));
         self.tri = Some(
             triangle::TrianglePass::new(
-                self.render.as_ref().unwrap().main_renderpass.clone()
+                self.render.as_ref().unwrap()
                 ));
+
+        self.app_start = Some(Instant::now());
     }
 }
 

@@ -1,33 +1,28 @@
 
 use std::sync::Arc;
 
-use vulkano::{Validated, command_buffer::{AutoCommandBufferBuilder, RenderPassBeginInfo, SubpassBeginInfo, SubpassEndInfo, allocator::{CommandBufferAllocator, StandardCommandBufferAllocator}}, device::Device, format::Format, image::{ImageAspects, ImageLayout}, swapchain::{SwapchainCreateInfo, SwapchainPresentInfo}, sync::{AccessFlags, GpuFuture, PipelineStages, future::FenceSignalFuture}};
+use vulkano::{Validated, command_buffer::{AutoCommandBufferBuilder, RenderPassBeginInfo, SubpassBeginInfo, SubpassEndInfo, allocator::StandardCommandBufferAllocator}, device::Device, format::Format, image::ImageLayout, pipeline::graphics::viewport::Viewport, swapchain::{SwapchainCreateInfo, SwapchainPresentInfo}, sync::{AccessFlags, GpuFuture, PipelineStages, future::FenceSignalFuture}};
 
 
-use vulkano::render_pass::{SubpassDescription, SubpassDependency, AttachmentDescription, AttachmentReference, RenderPass, RenderPassCreateFlags, Framebuffer, RenderPassCreateInfo};
+use vulkano::render_pass::{SubpassDescription, SubpassDependency, AttachmentDescription, AttachmentReference, RenderPass, Framebuffer, RenderPassCreateInfo};
 use vulkano::render_pass::FramebufferCreateInfo;
 
 use vulkano::image::view::{ImageView, ImageViewCreateInfo};
 use vulkano::command_buffer::PrimaryAutoCommandBuffer;
-use vulkano::swapchain::AcquireNextImageInfo;
 use vulkano::VulkanError;
 
-use crate::vkstate;
+use crate::{render::subpass_node::{NodeList, RenderSubpass}, vkstate};
 
-pub enum RenderSubpass {
-    Normal = 0, // color write, depth write + depth test
-}
+pub mod subpass_node;
 
-type CmdRecorder = AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>;
-
-pub trait CmdRecorderCB : FnOnce(&mut CmdRecorder) {}
-impl<T> CmdRecorderCB for T where T : FnOnce(&mut CmdRecorder) {}
-//pub type RenderCb = FnOnce(&mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>);
 
 pub struct Render
 {
     vkstate : vkstate::State,
     pub main_renderpass : Arc<RenderPass>,
+    
+    subpasses : subpass_node::NodeList,
+
     cmd_allocator : Arc<StandardCommandBufferAllocator>,
     framebuffers : Vec<Arc<Framebuffer>>,
     frames_in_flight : Vec<Option<Arc<FenceSignalFuture<Box<dyn GpuFuture>>>>>,
@@ -110,21 +105,35 @@ impl Render {
             frames_in_flight : [None, None, None].into(),
             frame_index : 0,
             recreate_swapchain : false,
+            subpasses : NodeList::new(),
         }
 
     }
     
-    pub fn record_command_buffer(&self, backbuf_id : usize, 
-        recorder : impl CmdRecorderCB) 
+    pub fn record_command_buffer(&self, backbuf_id : usize)
         -> Arc<PrimaryAutoCommandBuffer>
     {
         let mut cmd_builder = AutoCommandBufferBuilder::primary(
             self.cmd_allocator.clone(), self.vkstate.main_queue_family, 
             vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit).unwrap();
-    
+        
+        let main_extent = self.vkstate.swapchain.as_ref().unwrap().image_extent();
+
+        let normal_ctx = subpass_node::SubpassContext {
+            frame_no : 0,
+            ffid : self.frame_index as u8,
+            numff : self.frames_in_flight.len() as u8,
+            backbuf_id : backbuf_id as u8,
+            viewport : Viewport {
+                offset : [0.0, 0.0],
+                extent : [main_extent[0] as f32, main_extent[1] as f32],
+                depth_range : 0.0..=1.0,
+            },
+        };
+
         cmd_builder.begin_render_pass(
             RenderPassBeginInfo {
-                clear_values : vec![Some([0.0, 1.0, 0.0, 1.0].into())], 
+                clear_values : vec![Some([0.0, 0.0, 0.0, 1.0].into())], 
                 ..RenderPassBeginInfo::framebuffer(self.framebuffers[backbuf_id].clone())
             }, 
             SubpassBeginInfo {
@@ -132,13 +141,13 @@ impl Render {
                 ..Default::default()
             }).unwrap(); 
         
-        recorder(&mut cmd_builder);
+        self.subpasses.run_nodes(RenderSubpass::Normal, &mut cmd_builder, &normal_ctx);
 
         cmd_builder.end_render_pass(SubpassEndInfo::default()).unwrap();
         cmd_builder.build().unwrap()
     }
 
-    pub fn draw_frame(&mut self, recorder : impl CmdRecorderCB) 
+    pub fn draw_frame(&mut self) 
     {
         if self.recreate_swapchain {
             return;
@@ -160,7 +169,7 @@ impl Render {
         
         self.recreate_swapchain |= suboptimal;
         
-        let cmd = self.record_command_buffer(backbuffer_id as usize, recorder);
+        let cmd = self.record_command_buffer(backbuffer_id as usize);
 
         let prev_frame = (self.frame_index + self.frames_in_flight.len() - 1) % self.frames_in_flight.len();
 
@@ -226,5 +235,20 @@ impl Render {
             &self.main_renderpass);
         self.recreate_swapchain = false;
     }
+    
 
+    pub fn get_device(&self) -> &Arc<Device> {
+        &self.vkstate.device
+    }
+
+    pub fn get_main_renderpass(&self) -> &Arc<RenderPass> {
+        &self.main_renderpass
+    }
+    
+    pub fn register_node(&self, pass : subpass_node::RenderSubpass, 
+        name : String, callback : impl subpass_node::SubpassCallback) 
+        -> subpass_node::SubpassHandle
+    {
+        self.subpasses.register_node(pass, name, callback)
+    }
 }
