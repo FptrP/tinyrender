@@ -9,6 +9,7 @@ image = "*"
 rand = "*"
 winit = "*"
 vulkano = "*"
+vulkano-shaders = "*"
 
 [profile.release]
 debug = true

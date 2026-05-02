@@ -9,11 +9,13 @@ use crate::render::Render;
 
 mod vkstate;
 mod render;
+mod triangle;
 
 #[derive(Default)]
 struct App {
     window : Option<Arc<Window>>,
     render : Option<Render>,
+    tri : Option<triangle::TrianglePass>,
 }
 
 impl ApplicationHandler for App {
@@ -36,8 +38,16 @@ impl ApplicationHandler for App {
                 //
                 let render = self.render.as_mut().unwrap();
                 let window = self.window.as_ref().unwrap();
+                
+                let tri = self.tri.as_ref().unwrap();
 
-                render.draw_frame();
+                render.draw_frame(|cmd| {
+                    //
+                    cmd.bind_pipeline_graphics(tri.pipeline.clone());
+                    unsafe {
+                        cmd.draw(3, 1, 0, 0).unwrap();
+                    }
+                });
                 
                 if render.recreate_swapchain {
                     let res = [window.inner_size().width,
@@ -63,6 +73,10 @@ impl ApplicationHandler for App {
         
 
         self.render = Some(Render::new(vkstate));
+        self.tri = Some(
+            triangle::TrianglePass::new(
+                self.render.as_ref().unwrap().main_renderpass.clone()
+                ));
     }
 }
 

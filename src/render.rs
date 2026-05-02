@@ -8,7 +8,7 @@ use vulkano::render_pass::{SubpassDescription, SubpassDependency, AttachmentDesc
 use vulkano::render_pass::FramebufferCreateInfo;
 
 use vulkano::image::view::{ImageView, ImageViewCreateInfo};
-
+use vulkano::command_buffer::PrimaryAutoCommandBuffer;
 use vulkano::swapchain::AcquireNextImageInfo;
 use vulkano::VulkanError;
 
@@ -18,10 +18,16 @@ pub enum RenderSubpass {
     Normal = 0, // color write, depth write + depth test
 }
 
+type CmdRecorder = AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>;
+
+pub trait CmdRecorderCB : FnOnce(&mut CmdRecorder) {}
+impl<T> CmdRecorderCB for T where T : FnOnce(&mut CmdRecorder) {}
+//pub type RenderCb = FnOnce(&mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>);
+
 pub struct Render
 {
     vkstate : vkstate::State,
-    main_renderpass : Arc<RenderPass>,
+    pub main_renderpass : Arc<RenderPass>,
     cmd_allocator : Arc<StandardCommandBufferAllocator>,
     framebuffers : Vec<Arc<Framebuffer>>,
     frames_in_flight : Vec<Option<Arc<FenceSignalFuture<Box<dyn GpuFuture>>>>>,
@@ -107,8 +113,33 @@ impl Render {
         }
 
     }
+    
+    pub fn record_command_buffer(&self, backbuf_id : usize, 
+        recorder : impl CmdRecorderCB) 
+        -> Arc<PrimaryAutoCommandBuffer>
+    {
+        let mut cmd_builder = AutoCommandBufferBuilder::primary(
+            self.cmd_allocator.clone(), self.vkstate.main_queue_family, 
+            vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit).unwrap();
+    
+        cmd_builder.begin_render_pass(
+            RenderPassBeginInfo {
+                clear_values : vec![Some([0.0, 1.0, 0.0, 1.0].into())], 
+                ..RenderPassBeginInfo::framebuffer(self.framebuffers[backbuf_id].clone())
+            }, 
+            SubpassBeginInfo {
+                contents : vulkano::command_buffer::SubpassContents::Inline,
+                ..Default::default()
+            }).unwrap(); 
+        
+        recorder(&mut cmd_builder);
 
-    pub fn draw_frame(&mut self) {
+        cmd_builder.end_render_pass(SubpassEndInfo::default()).unwrap();
+        cmd_builder.build().unwrap()
+    }
+
+    pub fn draw_frame(&mut self, recorder : impl CmdRecorderCB) 
+    {
         if self.recreate_swapchain {
             return;
         }
@@ -128,25 +159,11 @@ impl Render {
         };
         
         self.recreate_swapchain |= suboptimal;
+        
+        let cmd = self.record_command_buffer(backbuffer_id as usize, recorder);
 
-        let mut cmd_builder = AutoCommandBufferBuilder::primary(self.cmd_allocator.clone(), self.vkstate.main_queue_family, 
-            vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit).unwrap();
-    
-        cmd_builder.begin_render_pass(
-            RenderPassBeginInfo {
-                clear_values : vec![Some([0.0, 1.0, 0.0, 1.0].into())],
-                ..RenderPassBeginInfo::framebuffer(self.framebuffers[backbuffer_id as usize].clone())
-            }, 
-            SubpassBeginInfo {
-                contents : vulkano::command_buffer::SubpassContents::Inline,
-                ..Default::default()
-            }).unwrap(); 
-        
-        
         let prev_frame = (self.frame_index + self.frames_in_flight.len() - 1) % self.frames_in_flight.len();
 
-        cmd_builder.end_render_pass(SubpassEndInfo::default()).unwrap();
-        let cmd = cmd_builder.build().unwrap();
         
         if let Some(fence) = self.frames_in_flight[self.frame_index].take() {
             fence.wait(None).unwrap();
