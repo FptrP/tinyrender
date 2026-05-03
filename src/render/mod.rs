@@ -1,7 +1,7 @@
 
 use std::sync::Arc;
 
-use vulkano::{Validated, command_buffer::{AutoCommandBufferBuilder, RenderPassBeginInfo, SubpassBeginInfo, SubpassEndInfo, allocator::StandardCommandBufferAllocator}, device::Device, format::Format, image::ImageLayout, pipeline::graphics::viewport::Viewport, swapchain::{SwapchainCreateInfo, SwapchainPresentInfo}, sync::{AccessFlags, GpuFuture, PipelineStages, future::FenceSignalFuture}};
+use vulkano::{Validated, command_buffer::{AutoCommandBufferBuilder, RenderPassBeginInfo, SubpassBeginInfo, SubpassEndInfo, allocator::StandardCommandBufferAllocator}, device::Device, format::Format, image::{Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageUsage}, memory::allocator::{AllocationCreateInfo, MemoryTypeFilter}, pipeline::graphics::viewport::Viewport, swapchain::{SwapchainCreateInfo, SwapchainPresentInfo}, sync::{AccessFlags, DependencyFlags, GpuFuture, PipelineStages, future::FenceSignalFuture}};
 
 
 use vulkano::render_pass::{SubpassDescription, SubpassDependency, AttachmentDescription, AttachmentReference, RenderPass, Framebuffer, RenderPassCreateInfo};
@@ -15,15 +15,17 @@ use crate::{render::subpass_node::{NodeList, RenderSubpass}, vkstate};
 
 pub mod subpass_node;
 
+const DEPTH_FMT : Format = Format::D24_UNORM_S8_UINT;
 
 pub struct Render
 {
     vkstate : vkstate::State,
     pub main_renderpass : Arc<RenderPass>,
-    
+    depth_view : Arc<ImageView>,
     subpasses : subpass_node::NodeList,
 
     cmd_allocator : Arc<StandardCommandBufferAllocator>,
+
     framebuffers : Vec<Arc<Framebuffer>>,
     frames_in_flight : Vec<Option<Arc<FenceSignalFuture<Box<dyn GpuFuture>>>>>,
     frame_index : usize,
@@ -32,42 +34,58 @@ pub struct Render
 
 impl Render {
     
-    fn create_main_renderpass(device : Arc<Device>, color_fmt : Format) -> Arc<RenderPass> {
-        //vulkano::single_pass_renderpass!()
-        
+    fn create_main_renderpass(device : Arc<Device>, color_fmt : Format) -> Arc<RenderPass> { 
         let rpinfo = RenderPassCreateInfo {
-            attachments : vec![AttachmentDescription {
-                format : color_fmt,
-                load_op : vulkano::render_pass::AttachmentLoadOp::Clear,
-                store_op : vulkano::render_pass::AttachmentStoreOp::Store,
-                initial_layout : vulkano::image::ImageLayout::Undefined,
-                final_layout : vulkano::image::ImageLayout::PresentSrc,
-                ..Default::default()
-            }],
+            attachments : vec![
+                AttachmentDescription {
+                    format : color_fmt,
+                    load_op : vulkano::render_pass::AttachmentLoadOp::Clear,
+                    store_op : vulkano::render_pass::AttachmentStoreOp::Store,
+                    initial_layout : vulkano::image::ImageLayout::Undefined,
+                    final_layout : vulkano::image::ImageLayout::PresentSrc,
+                    ..Default::default()
+                },
+                AttachmentDescription {
+                    format : DEPTH_FMT,
+                    load_op : vulkano::render_pass::AttachmentLoadOp::Clear,
+                    store_op : vulkano::render_pass::AttachmentStoreOp::DontCare,
+                    initial_layout : vulkano::image::ImageLayout::Undefined,
+                    final_layout : vulkano::image::ImageLayout::DepthStencilAttachmentOptimal,
+                    ..Default::default()
+                }
+            ],
             subpasses : vec![SubpassDescription {
                 color_attachments : vec![Some(AttachmentReference {
                     attachment : 0u32,
                     layout : ImageLayout::ColorAttachmentOptimal,
                     ..Default::default()
                 })],
+                depth_stencil_attachment : Some(AttachmentReference {
+                    attachment : 1u32,
+                    layout : ImageLayout::DepthStencilAttachmentOptimal,
+                    //aspects : ImageAspects::DEPTH,
+                    ..Default::default()
+                }),
                 ..Default::default()
             }],
             dependencies : vec![SubpassDependency {
                 src_subpass : None,
                 dst_subpass : Some(0u32),
                 src_stages : PipelineStages::ALL_COMMANDS,
-                dst_stages : PipelineStages::ALL_COMMANDS,
-                src_access : AccessFlags::MEMORY_READ,
-                dst_access : AccessFlags::MEMORY_WRITE,
+                dst_stages : PipelineStages::COLOR_ATTACHMENT_OUTPUT,
+                src_access : AccessFlags::MEMORY_READ|AccessFlags::MEMORY_WRITE,
+                dst_access : AccessFlags::COLOR_ATTACHMENT_WRITE,
+                dependency_flags : DependencyFlags::BY_REGION,
                 ..Default::default()
             },
             SubpassDependency {
                 src_subpass : Some(0u32),
                 dst_subpass : None,
-                src_stages : PipelineStages::ALL_COMMANDS,
+                src_stages : PipelineStages::COLOR_ATTACHMENT_OUTPUT,
                 dst_stages : PipelineStages::ALL_COMMANDS,
-                src_access : AccessFlags::MEMORY_WRITE,
-                dst_access : AccessFlags::MEMORY_READ,
+                src_access : AccessFlags::COLOR_ATTACHMENT_WRITE,
+                dst_access : AccessFlags::MEMORY_READ|AccessFlags::MEMORY_WRITE,
+                dependency_flags : DependencyFlags::BY_REGION,
                 ..Default::default()
             }],
             ..Default::default()
@@ -76,12 +94,29 @@ impl Render {
         RenderPass::new(device, rpinfo).unwrap()
     }
     
-    fn create_framebuffers(ctx : &vkstate::State, render_pass : &Arc<RenderPass>) -> Vec<Arc<Framebuffer>> {
+    fn create_depth_view(vk : &vkstate::State, extent : [u32; 2]) -> Arc<ImageView> {
+        let depth_image = Image::new(vk.memory_allocator.clone(), 
+            ImageCreateInfo {
+                image_type : vulkano::image::ImageType::Dim2d,
+                format : DEPTH_FMT,
+                extent : [extent[0], extent[1], 1],
+                usage : ImageUsage::DEPTH_STENCIL_ATTACHMENT|ImageUsage::TRANSIENT_ATTACHMENT,
+                ..Default::default()
+            }, 
+            AllocationCreateInfo {
+                memory_type_filter : MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            }).unwrap();
+
+        ImageView::new(depth_image.clone(), ImageViewCreateInfo::from_image(&depth_image)).unwrap()
+    }
+
+    fn create_framebuffers(ctx : &vkstate::State, render_pass : &Arc<RenderPass>, depth_view : &Arc<ImageView>) -> Vec<Arc<Framebuffer>> {
         ctx.backbuffers.iter().map(|img| {
             let view_info = ImageViewCreateInfo::from_image(&img);
             let backbuffer_view = ImageView::new(img.clone(), view_info).unwrap();
             let fbinfo = FramebufferCreateInfo {
-                attachments : vec![backbuffer_view],
+                attachments : vec![backbuffer_view, depth_view.clone()],
                 extent : img.extent()[..2].try_into().unwrap(),
                 layers : 1u32, 
                 ..Default::default()
@@ -92,10 +127,12 @@ impl Render {
     }
 
     pub fn new(ctx : vkstate::State) -> Self {
-        let main_rp = Self::create_main_renderpass(ctx.device.clone(), ctx.swapchain.as_ref().unwrap().image_format());
-        let framebuffers = Self::create_framebuffers(&ctx, &main_rp);
+        let main_rp = Self::create_main_renderpass(ctx.device.clone(), ctx.swapchain.as_ref().unwrap().image_format()); 
+        let depth_view = Self::create_depth_view(&ctx, ctx.swapchain.as_ref().unwrap().image_extent()); 
+        let framebuffers = Self::create_framebuffers(&ctx, &main_rp, &depth_view);
         
         let cmd_allocator = Arc::new(StandardCommandBufferAllocator::new(ctx.device.clone(), Default::default())); 
+        
 
         Self {
             vkstate : ctx,
@@ -106,6 +143,7 @@ impl Render {
             frame_index : 0,
             recreate_swapchain : false,
             subpasses : NodeList::new(),
+            depth_view,
         }
 
     }
@@ -133,7 +171,8 @@ impl Render {
 
         cmd_builder.begin_render_pass(
             RenderPassBeginInfo {
-                clear_values : vec![Some([0.0, 0.0, 0.0, 1.0].into())], 
+                clear_values : vec![Some([0.0, 0.0, 0.0, 1.0].into()), 
+                    Some(vulkano::format::ClearValue::DepthStencil((1f32, 0u32)))], 
                 ..RenderPassBeginInfo::framebuffer(self.framebuffers[backbuf_id].clone())
             }, 
             SubpassBeginInfo {
@@ -230,9 +269,13 @@ impl Render {
 
         self.vkstate.swapchain = Some(swapchain);
         self.vkstate.backbuffers = images;
+        
+        self.depth_view = Self::create_depth_view(&self.vkstate, new_extent);
 
-        self.framebuffers = Self::create_framebuffers(&self.vkstate, 
-            &self.main_renderpass);
+        self.framebuffers = Self::create_framebuffers(
+            &self.vkstate, 
+            &self.main_renderpass,
+            &self.depth_view);
         self.recreate_swapchain = false;
     }
     

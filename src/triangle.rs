@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashSet, sync::Arc, sync::Mutex};
 
-use vulkano::{device::DeviceOwned, pipeline::{self, DynamicState, GraphicsPipeline, Pipeline, PipelineLayout, PipelineShaderStageCreateInfo, graphics::{GraphicsPipelineCreateInfo, viewport}}, render_pass::{RenderPass, Subpass}};
+use vulkano::{device::DeviceOwned, pipeline::{self, DynamicState, GraphicsPipeline, Pipeline, PipelineLayout, PipelineShaderStageCreateInfo, graphics::{GraphicsPipelineCreateInfo, depth_stencil::{DepthState, DepthStencilState}, viewport}}, render_pass::{RenderPass, Subpass}};
 
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 
@@ -51,13 +51,7 @@ impl TrianglePass {
                 .unwrap(),
         ).unwrap();
         
-        let subpass = Subpass::from(renderer.get_main_renderpass().clone(), 0).unwrap();
-        let viewport = Viewport {
-            offset: [0.0, 0.0],
-            extent: [640.0, 480.0],
-            depth_range: 0.0..=1.0,
-        };
-        
+        let subpass = Subpass::from(renderer.get_main_renderpass().clone(), 0).unwrap(); 
             
         let mut info = GraphicsPipelineCreateInfo {
             stages : stages.into_iter().collect(),
@@ -65,8 +59,16 @@ impl TrianglePass {
             input_assembly_state : Some(Default::default()),
             rasterization_state: Some(Default::default()),
             multisample_state: Some(Default::default()),
+            
+            depth_stencil_state : Some(DepthStencilState {
+                depth : Some(DepthState {
+                    write_enable : true,
+                    compare_op : pipeline::graphics::depth_stencil::CompareOp::LessOrEqual
+                }),
+                ..Default::default()
+            }),
+
             viewport_state : Some(ViewportState { 
-                viewports : [viewport].into_iter().collect(), 
                 ..Default::default()}),
             color_blend_state: Some(ColorBlendState::with_attachment_states(
                 subpass.num_color_attachments(),

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use vulkano::{
-    VulkanLibrary, device::{Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags, physical::PhysicalDevice}, image::Image, instance::{Instance, InstanceCreateInfo}, swapchain::{Surface, Swapchain, SwapchainCreateInfo}
+    VulkanLibrary, device::{Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags, physical::PhysicalDevice}, image::Image, instance::{Instance, InstanceCreateInfo}, memory::allocator::StandardMemoryAllocator, swapchain::{Surface, Swapchain, SwapchainCreateInfo}
 };
 
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -16,6 +16,8 @@ pub struct State {
 
     pub swapchain : Option<Arc<Swapchain>>,
     pub backbuffers : Vec<Arc<Image>>,
+
+    pub memory_allocator : Arc<StandardMemoryAllocator>,
 }
 
 //type WindowType = Arc<impl HasDisplayHandle + HasWindowHandle + Send + Sync>;
@@ -87,11 +89,12 @@ impl State {
             instance,
             physical_device : phys_device,
             surface : Some(surface),
-            device,
+            device : device.clone(),
             main_queue,
             main_queue_family : queue_family as u32,
             swapchain : Some(swapchain),
-            backbuffers : images
+            backbuffers : images,
+            memory_allocator : Arc::new(StandardMemoryAllocator::new_default(device)),
         }
     }
 
