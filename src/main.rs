@@ -11,6 +11,7 @@ use crate::render::Render;
 mod vkstate;
 mod render;
 mod triangle;
+mod scene;
 
 #[derive(Default)]
 struct App {

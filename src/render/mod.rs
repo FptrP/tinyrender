@@ -1,7 +1,7 @@
 
 use std::sync::Arc;
 
-use vulkano::{Validated, command_buffer::{AutoCommandBufferBuilder, RenderPassBeginInfo, SubpassBeginInfo, SubpassEndInfo, allocator::StandardCommandBufferAllocator}, device::Device, format::Format, image::{Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageUsage}, memory::allocator::{AllocationCreateInfo, MemoryTypeFilter}, pipeline::graphics::viewport::Viewport, swapchain::{SwapchainCreateInfo, SwapchainPresentInfo}, sync::{AccessFlags, DependencyFlags, GpuFuture, PipelineStages, future::FenceSignalFuture}};
+use vulkano::{Validated, buffer::{Buffer, BufferUsage, allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo}}, command_buffer::{AutoCommandBufferBuilder, RenderPassBeginInfo, SubpassBeginInfo, SubpassEndInfo, allocator::StandardCommandBufferAllocator}, device::{Device, Queue}, format::Format, image::{Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageUsage}, memory::allocator::{AllocationCreateInfo, MemoryTypeFilter}, pipeline::graphics::viewport::Viewport, swapchain::{SwapchainCreateInfo, SwapchainPresentInfo}, sync::{AccessFlags, DependencyFlags, GpuFuture, PipelineStages, future::FenceSignalFuture}};
 
 
 use vulkano::render_pass::{SubpassDescription, SubpassDependency, AttachmentDescription, AttachmentReference, RenderPass, Framebuffer, RenderPassCreateInfo};
@@ -14,6 +14,7 @@ use vulkano::VulkanError;
 use crate::{render::subpass_node::{NodeList, RenderSubpass}, vkstate};
 
 pub mod subpass_node;
+pub mod mesh_pool;
 
 const DEPTH_FMT : Format = Format::D24_UNORM_S8_UINT;
 
@@ -24,11 +25,15 @@ pub struct Render
     depth_view : Arc<ImageView>,
     subpasses : subpass_node::NodeList,
 
+    mesh_allocator : mesh_pool::MeshPool,
     cmd_allocator : Arc<StandardCommandBufferAllocator>,
+    subbuffer_allocator : Arc<SubbufferAllocator>,
+        
 
     framebuffers : Vec<Arc<Framebuffer>>,
     frames_in_flight : Vec<Option<Arc<FenceSignalFuture<Box<dyn GpuFuture>>>>>,
     frame_index : usize,
+    frame_no : usize,
     pub recreate_swapchain : bool,
 }
 
@@ -133,6 +138,23 @@ impl Render {
         
         let cmd_allocator = Arc::new(StandardCommandBufferAllocator::new(ctx.device.clone(), Default::default())); 
         
+        let subbuffer_allocator = SubbufferAllocator::new(
+            ctx.memory_allocator.clone(),
+            SubbufferAllocatorCreateInfo {
+                memory_type_filter : MemoryTypeFilter::PREFER_HOST|MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                arena_size : 512u64 << 10u64,
+                buffer_usage : BufferUsage::TRANSFER_DST|BufferUsage::TRANSFER_SRC|BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
+            });
+
+        const INDEX_POOL_SIZE : u32 = 1u32 << 20u32;
+        const VERTEX_POOL_SIZE : u32 = 4u32 << 20u32;
+
+        let mesh_pool = mesh_pool::MeshPool::new(
+            ctx.memory_allocator.clone(), 
+            INDEX_POOL_SIZE, 
+            VERTEX_POOL_SIZE, 
+            4);
 
         Self {
             vkstate : ctx,
@@ -141,9 +163,12 @@ impl Render {
             cmd_allocator,
             frames_in_flight : [None, None, None].into(),
             frame_index : 0,
+            frame_no : 0,
             recreate_swapchain : false,
             subpasses : NodeList::new(),
             depth_view,
+            mesh_allocator : mesh_pool,
+            subbuffer_allocator : Arc::new(subbuffer_allocator),
         }
 
     }
@@ -158,7 +183,7 @@ impl Render {
         let main_extent = self.vkstate.swapchain.as_ref().unwrap().image_extent();
 
         let normal_ctx = subpass_node::SubpassContext {
-            frame_no : 0,
+            frame_no : self.frame_no,
             ffid : self.frame_index as u8,
             numff : self.frames_in_flight.len() as u8,
             backbuf_id : backbuf_id as u8,
@@ -246,6 +271,7 @@ impl Render {
 
         self.frames_in_flight[self.frame_index] = future;
         self.frame_index = (self.frame_index + 1) % self.frames_in_flight.len();
+        self.frame_no += 1;
     }
 
     pub fn recreate_swapchain(&mut self, new_extent : [u32; 2]) {
@@ -294,4 +320,24 @@ impl Render {
     {
         self.subpasses.register_node(pass, name, callback)
     }
-}
+
+    pub fn mesh_pool(&self) -> &mesh_pool::MeshPool {
+        &self.mesh_allocator
+    }
+
+    pub fn staging_buf_allocator(&self) -> &Arc<SubbufferAllocator> {
+        &self.subbuffer_allocator
+    }
+    
+    pub fn command_buf_allocator(&self) -> &Arc<StandardCommandBufferAllocator> {
+        &self.cmd_allocator
+    }
+
+    pub fn main_queue_family(&self) -> u32 { 
+        self.vkstate.main_queue_family
+    }
+
+    pub fn main_queue(&self) -> &Arc<Queue> {
+        &self.vkstate.main_queue
+    }
+} 
