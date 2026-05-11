@@ -28,7 +28,7 @@ impl CameraController {
             yaw : 0f32,
             pitch : 0f32,
             prev_mouse_pos : na::point![0f32, 0f32],
-            sensitivity : 0.05f32,
+            sensitivity : 0.01f32,
             global_pos,
             fovy,
             aspect,

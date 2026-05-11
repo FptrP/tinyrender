@@ -104,10 +104,18 @@ impl ApplicationHandler for App {
                 };
 
                 match event.physical_key {
-                    PhysicalKey::Code(KeyCode::KeyW) => handle_axis(&event, CameraMove::Forward),
-                    PhysicalKey::Code(KeyCode::KeyS) => handle_axis(&event, CameraMove::Backward), 
-                    PhysicalKey::Code(KeyCode::KeyA) => handle_axis(&event, CameraMove::Left), 
-                    PhysicalKey::Code(KeyCode::KeyD) => handle_axis(&event, CameraMove::Right),
+                    PhysicalKey::Code(KeyCode::KeyW) 
+                    | PhysicalKey::Code(KeyCode::ArrowUp) => 
+                        handle_axis(&event, CameraMove::Forward),
+                    PhysicalKey::Code(KeyCode::KeyS) 
+                    | PhysicalKey::Code(KeyCode::ArrowDown) => 
+                        handle_axis(&event, CameraMove::Backward), 
+                    PhysicalKey::Code(KeyCode::KeyA) 
+                    | PhysicalKey::Code(KeyCode::ArrowLeft) =>
+                        handle_axis(&event, CameraMove::Left), 
+                    PhysicalKey::Code(KeyCode::KeyD)
+                    | PhysicalKey::Code(KeyCode::ArrowRight) => 
+                        handle_axis(&event, CameraMove::Right),
                     PhysicalKey::Code(KeyCode::KeyF) => { 
                         if event.state == winit::event::ElementState::Pressed {
                             self.mouse_look = !self.mouse_look

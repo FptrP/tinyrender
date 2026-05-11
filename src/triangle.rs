@@ -18,8 +18,8 @@ extern crate vulkano_shaders;
 struct TriVertex {
     #[format(R32G32B32_SFLOAT)]
     pos : [f32; 3],
-    #[format(R8G8B8_UNORM)]
-    color : [u8; 3],
+    #[format(R8G8B8A8_UNORM)]
+    color : [u8; 4],
 }
 
 mod vs {
@@ -120,17 +120,17 @@ impl TrianglePass {
                 let mut verts = staging.write().unwrap();
                 verts[0] = TriVertex {
                     pos : [0.0, 0.5, 0.5],
-                    color : [255u8, 0u8, 0u8]
+                    color : [255u8, 0u8, 0u8, 0u8]
                 };
 
                 verts[1] = TriVertex {
                     pos : [-0.5, -0.5, 0.5],
-                    color : [0u8, 255u8, 0u8]
+                    color : [0u8, 255u8, 0u8, 0u8]
                 };
 
                 verts[2] = TriVertex {
                     pos : [0.5, -0.5, 0.5],
-                    color : [0u8, 0u8, 255u8]
+                    color : [0u8, 0u8, 255u8, 0u8]
                 };
             }
  
