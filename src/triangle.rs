@@ -1,4 +1,5 @@
-use std::{cell::RefCell, collections::HashSet, sync::Arc, sync::Mutex};
+use std::{cell::RefCell, collections::HashSet, sync::{Arc, Mutex}};
+use std::sync::RwLock;
 
 use vulkano::{command_buffer::{AutoCommandBufferBuilder, BufferCopy, CopyBufferInfo}, device::DeviceOwned, pipeline::{self, DynamicState, GraphicsPipeline, Pipeline, PipelineLayout, PipelineShaderStageCreateInfo, graphics::{GraphicsPipelineCreateInfo, depth_stencil::{DepthState, DepthStencilState}, vertex_input::{VertexBuffersCollection, VertexDefinition, VertexInputState}, viewport}}, render_pass::{RenderPass, Subpass}, sync::GpuFuture};
 
@@ -37,6 +38,7 @@ mod ps {
 
 use crate::render::{self, Render, mesh_pool, subpass_node::RenderSubpass};
 use crate::render::subpass_node::SubpassHandle;
+use crate::RenderGlobalParams;
 
 pub struct TrianglePass {
     pub pipeline : Arc<GraphicsPipeline>,
@@ -46,7 +48,7 @@ pub struct TrianglePass {
 }
 
 impl TrianglePass {
-    pub fn new(renderer : &Render) -> Self {
+    pub fn new(renderer : &Render, params: Arc<RwLock<RenderGlobalParams>>) -> Self {
         let device = renderer.get_device();
         let vshader = vs::load(device.clone()).unwrap();
         let pshader = ps::load(device.clone()).unwrap();
@@ -99,41 +101,39 @@ impl TrianglePass {
 
         let pipeline = pipeline_orig.clone();
         let tri_color = tri_color_orig.clone(); 
-        
+
         let vinfo = TriVertex::per_vertex();
 
         let tri_mesh = renderer.mesh_pool().alloc_mesh(vinfo.stride, 0, 3, 0);
         
         println!("tri_mesh : stride {}", vinfo.stride);
-
-        {
-            let staging = renderer.staging_buf_allocator()
-                .allocate_slice::<TriVertex>(tri_mesh.num_verts() as u64).unwrap();
+        
+        let num_verts = tri_mesh.num_verts();
+        
+        let dst_buffer = tri_mesh.vertex_buffer().unwrap();
+        let dst_offset = tri_mesh.vertex_byte_offset();
+        
+        let fence = renderer.run_async_commands(|cmd, alloc| {
+            let staging = alloc.allocate_slice::<TriVertex>(num_verts as u64).unwrap();
             
             {
                 let mut verts = staging.write().unwrap();
                 verts[0] = TriVertex {
-                    pos : [0.0, -0.5, 0.5],
+                    pos : [0.0, 0.5, 0.5],
                     color : [255u8, 0u8, 0u8]
                 };
 
                 verts[1] = TriVertex {
-                    pos : [-0.5, 0.5, 0.5],
+                    pos : [-0.5, -0.5, 0.5],
                     color : [0u8, 255u8, 0u8]
                 };
 
                 verts[2] = TriVertex {
-                    pos : [0.5, 0.5, 0.5],
+                    pos : [0.5, -0.5, 0.5],
                     color : [0u8, 0u8, 255u8]
                 };
             }
-
-            let dst_buffer = tri_mesh.vertex_buffer().unwrap();
-            let dst_offset = tri_mesh.vertex_byte_offset();
-            let mut cmd = AutoCommandBufferBuilder::primary(
-                renderer.command_buf_allocator().clone(), renderer.main_queue_family(), 
-                vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit).unwrap();
-        
+ 
             cmd.copy_buffer(CopyBufferInfo {
                 regions : [BufferCopy {
                     src_offset : 0,
@@ -143,27 +143,24 @@ impl TrianglePass {
                 }].into(),
                 ..CopyBufferInfo::buffers(staging.clone(), dst_buffer)
             }).unwrap();
+        }).unwrap();
 
-            let submit = cmd.build().unwrap();
-
-            vulkano::sync::now(renderer.get_device().clone())
-                .then_execute(renderer.main_queue().clone(), submit)
-                .unwrap()
-                .then_signal_fence_and_flush()
-                .unwrap()
-                .wait(None)
-                .unwrap();
-        }
+        fence.wait(None).unwrap(); 
         
         let tri_mesh_orig = tri_mesh.clone();
 
         let hndl = renderer.register_node(RenderSubpass::Normal, String::from("triangle"), move |cmd, ctx| { 
+            let params_const = params.read().unwrap(); 
+
+            tri_mesh.update_lfu(ctx.frame_no as u64);
+
             cmd.set_viewport(0, vec![ctx.viewport.clone()].into()).unwrap();
             cmd.bind_pipeline_graphics(pipeline.clone()).unwrap();
             cmd.bind_vertex_buffers(0u32, (tri_mesh.vertex_buffer().unwrap(),)).unwrap(); 
 
             if pipeline.layout().push_constant_ranges().len() != 0 {
-                cmd.push_constants(pipeline.layout().clone(), 0, *tri_color.lock().unwrap()).unwrap();
+                let floats : [f32; 16] = params_const.view_projection.as_slice().try_into().unwrap();
+                cmd.push_constants(pipeline.layout().clone(), 0, floats).unwrap();
             }
             unsafe { cmd.draw(tri_mesh.num_verts(), 1, tri_mesh.vertex_offset(), 0).unwrap() };
         });

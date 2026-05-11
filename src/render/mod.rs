@@ -33,7 +33,7 @@ pub struct Render
     framebuffers : Vec<Arc<Framebuffer>>,
     frames_in_flight : Vec<Option<Arc<FenceSignalFuture<Box<dyn GpuFuture>>>>>,
     frame_index : usize,
-    frame_no : usize,
+    frame_no : u64,
     pub recreate_swapchain : bool,
 }
 
@@ -241,6 +241,11 @@ impl Render {
         if let Some(fence) = self.frames_in_flight[self.frame_index].take() {
             fence.wait(None).unwrap();
         }
+        
+        if self.frame_no >= self.frames_in_flight.len() as u64 {
+            let safe_frame = self.frame_no - self.frames_in_flight.len() as u64;
+            self.mesh_allocator.collect_garbage(safe_frame);
+        }
 
         let previous_future = match &self.frames_in_flight[prev_frame] {
             None => {
@@ -339,5 +344,23 @@ impl Render {
 
     pub fn main_queue(&self) -> &Arc<Queue> {
         &self.vkstate.main_queue
+    }
+
+    pub fn run_async_commands<F>(&self, callback : F) 
+        -> Result<FenceSignalFuture<impl GpuFuture>, Validated<VulkanError>> 
+        where F: FnOnce(&mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, &SubbufferAllocator)
+    {
+        let mut cmd = AutoCommandBufferBuilder::primary(
+                self.command_buf_allocator().clone(), self.main_queue_family(), 
+                vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit).unwrap();
+        
+        callback(&mut cmd, &self.subbuffer_allocator);
+        
+        let submit = cmd.build()?;
+
+        vulkano::sync::now(self.get_device().clone())
+            .then_execute(self.main_queue().clone(), submit)
+            .unwrap()
+            .then_signal_fence_and_flush()
     }
 } 

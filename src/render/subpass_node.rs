@@ -13,7 +13,7 @@ pub enum RenderSubpass {
 
 pub struct SubpassContext
 {
-    pub frame_no : usize,
+    pub frame_no : u64,
     pub ffid : u8, // frame-in-flight index 
     pub numff : u8, // num frames in flight 
     pub backbuf_id : u8, 
