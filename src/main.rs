@@ -200,7 +200,9 @@ impl ApplicationHandler for App {
         let triangle_pass = triangle::TrianglePass::new(
             self.render.as_ref().unwrap(), 
             self.render_params.clone());
-    
+
+        triangle_pass.handle.toggle(); 
+        
         self.tri = Some(triangle_pass);
         
         if !self.scene_path.is_empty() {

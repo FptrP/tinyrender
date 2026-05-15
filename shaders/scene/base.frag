@@ -19,6 +19,6 @@ layout (set = 0, binding = 1) uniform InstanceConsts {
 } instConsts;
 
 void main() {
-  float k = max(dot(in_norm, normalize(vec3(1, -1, 1))), 0);
-  out_color = vec4(k, k, k, 1);
+  float k = max(dot(in_norm, normalize(vec3(1, -1, 1))), 0.1);  
+  out_color = vec4(pow(k * vec3(in_uv, 1), vec3(1.0/2.2)), 1);
 }
