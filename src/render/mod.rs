@@ -1,7 +1,7 @@
 
 use std::sync::Arc;
 
-use vulkano::{Validated, buffer::{Buffer, BufferUsage, allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo}}, command_buffer::{AutoCommandBufferBuilder, RenderPassBeginInfo, SubpassBeginInfo, SubpassEndInfo, allocator::StandardCommandBufferAllocator}, device::{Device, Queue}, format::Format, image::{Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageUsage}, memory::allocator::{AllocationCreateInfo, MemoryTypeFilter}, pipeline::graphics::viewport::Viewport, swapchain::{SwapchainCreateInfo, SwapchainPresentInfo}, sync::{AccessFlags, DependencyFlags, GpuFuture, PipelineStages, future::FenceSignalFuture}};
+use vulkano::{Validated, buffer::{Buffer, BufferUsage, allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo}}, command_buffer::{AutoCommandBufferBuilder, RenderPassBeginInfo, SubpassBeginInfo, SubpassEndInfo, allocator::StandardCommandBufferAllocator}, device::{Device, Queue}, format::Format, image::{Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageUsage}, memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::graphics::viewport::Viewport, swapchain::{SwapchainCreateInfo, SwapchainPresentInfo}, sync::{AccessFlags, DependencyFlags, GpuFuture, PipelineStages, future::FenceSignalFuture}};
 
 
 use vulkano::render_pass::{SubpassDescription, SubpassDependency, AttachmentDescription, AttachmentReference, RenderPass, Framebuffer, RenderPassCreateInfo};
@@ -10,6 +10,8 @@ use vulkano::render_pass::FramebufferCreateInfo;
 use vulkano::image::view::{ImageView, ImageViewCreateInfo};
 use vulkano::command_buffer::PrimaryAutoCommandBuffer;
 use vulkano::VulkanError;
+
+use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 
 use crate::{render::subpass_node::{NodeList, RenderSubpass}, vkstate};
 
@@ -28,7 +30,7 @@ pub struct Render
     mesh_allocator : mesh_pool::MeshPool,
     cmd_allocator : Arc<StandardCommandBufferAllocator>,
     subbuffer_allocator : Arc<SubbufferAllocator>,
-        
+    descriptor_set_allocator : Arc<StandardDescriptorSetAllocator>,        
 
     framebuffers : Vec<Arc<Framebuffer>>,
     frames_in_flight : Vec<Option<Arc<FenceSignalFuture<Box<dyn GpuFuture>>>>>,
@@ -155,6 +157,9 @@ impl Render {
             INDEX_POOL_SIZE, 
             VERTEX_POOL_SIZE, 
             4);
+        
+        let descriptor_set_allocator = StandardDescriptorSetAllocator::new(
+            ctx.device.clone(), Default::default());
 
         Self {
             vkstate : ctx,
@@ -169,6 +174,7 @@ impl Render {
             depth_view,
             mesh_allocator : mesh_pool,
             subbuffer_allocator : Arc::new(subbuffer_allocator),
+            descriptor_set_allocator : Arc::new(descriptor_set_allocator),
         }
 
     }
@@ -192,7 +198,11 @@ impl Render {
                 extent : [main_extent[0] as f32, main_extent[1] as f32],
                 depth_range : 0.0..=1.0,
             },
+            staging_allocator : self.subbuffer_allocator.clone(),
+            descriptor_set_allocator : self.descriptor_set_allocator.clone()
         };
+        
+        self.subpasses.run_nodes(RenderSubpass::BeforeRender, &mut cmd_builder, &normal_ctx);
 
         cmd_builder.begin_render_pass(
             RenderPassBeginInfo {
@@ -233,15 +243,16 @@ impl Render {
         
         self.recreate_swapchain |= suboptimal;
         
+        if let Some(mut fence) = self.frames_in_flight[self.frame_index].take() {
+            fence.cleanup_finished();
+            fence.wait(None).unwrap();
+            fence.cleanup_finished();
+        }
+
         let cmd = self.record_command_buffer(backbuffer_id as usize);
 
         let prev_frame = (self.frame_index + self.frames_in_flight.len() - 1) % self.frames_in_flight.len();
-
-        
-        if let Some(fence) = self.frames_in_flight[self.frame_index].take() {
-            fence.wait(None).unwrap();
-        }
-        
+                
         if self.frame_no >= self.frames_in_flight.len() as u64 {
             let safe_frame = self.frame_no - self.frames_in_flight.len() as u64;
             self.mesh_allocator.collect_garbage(safe_frame);
@@ -269,6 +280,7 @@ impl Render {
             Ok(f) => Some(Arc::new(f)),
             Err(VulkanError::OutOfDate) => {
                 self.recreate_swapchain = true;
+                println!("Submit err");
                 None
             },
             Err(e) => panic!("{}", e),
@@ -345,7 +357,9 @@ impl Render {
     pub fn main_queue(&self) -> &Arc<Queue> {
         &self.vkstate.main_queue
     }
-
+    pub fn mem_allocator(&self) -> &Arc<StandardMemoryAllocator> {
+        &self.vkstate.memory_allocator
+    }
     pub fn run_async_commands<F>(&self, callback : F) 
         -> Result<FenceSignalFuture<impl GpuFuture>, Validated<VulkanError>> 
         where F: FnOnce(&mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, &SubbufferAllocator)
@@ -362,5 +376,20 @@ impl Render {
             .then_execute(self.main_queue().clone(), submit)
             .unwrap()
             .then_signal_fence_and_flush()
+    }
+
+    pub fn descriptor_set_allocator(&self) -> &Arc<StandardDescriptorSetAllocator> {
+        &self.descriptor_set_allocator
+    }
+
+    pub fn get_subpass(&self, id : RenderSubpass) -> Option<vulkano::render_pass::Subpass> {
+        match id {
+            RenderSubpass::Normal => Some(vulkano::render_pass::Subpass::from(self.main_renderpass.clone(), 0).unwrap()),
+            _ => None,
+        }
+    }
+
+    pub fn get_num_frames_in_flight(&self) -> usize {
+        self.frames_in_flight.len()
     }
 } 

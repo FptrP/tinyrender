@@ -11,16 +11,20 @@ use winit::{
 
 
 
+use crate::scene_render::SceneRenderer;
 use crate::{camera_controller::CameraController, render::Render};
+
+use crate::scene::Scene;
 
 
 mod vkstate;
 mod render;
 mod triangle;
 mod scene;
+mod scene_render;
 mod camera_controller;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct RenderGlobalParams {
     pub view : Matrix4<f32>,
     pub projection : Matrix4<f32>,
@@ -48,6 +52,9 @@ struct App {
     pressed_directions : [bool; 16],
     render_params : Arc<RwLock<RenderGlobalParams>>,
     mouse_look : bool,
+    scene : Option<Arc<Scene>>,
+    scene_render : Option<SceneRenderer>,
+    scene_path : String,
 }
 
 impl App {
@@ -147,6 +154,11 @@ impl ApplicationHandler for App {
                     params_w.projection = self.camera.projection_matrix();
                     params_w.view_projection = params_w.projection * params_w.view;
                 }
+                
+                {
+                    let scene_render = self.scene_render.as_ref().unwrap();
+                    scene_render.update_camera(&self.camera);
+                }
 
                 let render = self.render.as_mut().unwrap();
                 let window = self.window.as_ref().unwrap(); 
@@ -190,7 +202,12 @@ impl ApplicationHandler for App {
             self.render_params.clone());
     
         self.tri = Some(triangle_pass);
-
+        
+        if !self.scene_path.is_empty() {
+            let scene = Scene::import_gltf(self.render.as_ref().unwrap(), &self.scene_path);
+            self.scene = Some(scene.clone());
+            self.scene_render = Some(SceneRenderer::new(self.render.as_ref().unwrap(), scene));
+        }
         self.app_start = Some(Instant::now());
     }
 }
@@ -210,6 +227,9 @@ fn main() {
         mouse_look : false,
         pressed_directions : [false; 16],
         render_params : Arc::new(RwLock::new(RenderGlobalParams::default())),
+        scene : None,
+        scene_render : None,
+        scene_path : String::from("assets/water_bottle/WaterBottle.gltf"),
     };
     event_loop.run_app(&mut app).unwrap();
 }

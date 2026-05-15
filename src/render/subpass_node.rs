@@ -1,12 +1,16 @@
 
+use vulkano::buffer::allocator::SubbufferAllocator;
+use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::pipeline::graphics::viewport::Viewport;
 
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
+
 
 use std::sync::{Arc, Mutex};
 
 #[derive(Copy, Clone)]
 pub enum RenderSubpass {
+    BeforeRender,
     Normal, // color write, depth write + depth test
     Count,
 }
@@ -18,6 +22,15 @@ pub struct SubpassContext
     pub numff : u8, // num frames in flight 
     pub backbuf_id : u8, 
     pub viewport : Viewport, 
+
+    pub staging_allocator : Arc<SubbufferAllocator>,
+    pub descriptor_set_allocator : Arc<StandardDescriptorSetAllocator>,
+    //pub - temporal descriptor sets allocator 
+
+}
+
+pub struct ComputeContext {
+
 }
 
 struct SubpassNode {
@@ -30,8 +43,7 @@ pub trait SubpassCallback : FnMut(&mut AutoCommandBufferBuilder<PrimaryAutoComma
 
 impl<T> SubpassCallback for T 
     where T : FnMut(&mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, &SubpassContext) + Send + Sync + 'static 
-{} 
-
+{}
 
 pub struct SubpassHandle {
     id : u32, 

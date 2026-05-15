@@ -10,6 +10,7 @@ rand = "*"
 winit = "*"
 vulkano = "*"
 vulkano-shaders = "*"
+gltf = "*"
 
 [profile.release]
 debug = true
