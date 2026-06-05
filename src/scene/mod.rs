@@ -2,12 +2,12 @@
 use gltf::Gltf;
 
 use gltf::json::Path;
-use gltf::json::extensions::mesh;
 use gltf::mesh::util::ReadIndices;
 use vulkano::buffer::{BufferContents, Subbuffer};
 use vulkano::buffer::allocator::SubbufferAllocator;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, BufferCopy, CopyBufferInfo, PrimaryAutoCommandBuffer};
 use vulkano::pipeline::graphics::vertex_input::Vertex;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::render::mesh_pool::MeshDesc;
@@ -15,128 +15,16 @@ use crate::render::{self, Render};
 use crate::scene::instances::{InstanceHandle, InstanceManager};
 
 pub mod instances;
+pub mod mesh;
+pub mod material;
 
-#[repr(C)]
-#[derive(BufferContents, Vertex, Clone)]
-pub struct VertexPNUV {
-    #[format(R32G32B32_SFLOAT)]
-    pub pos : [f32; 3],
-    #[format(R32G32B32_SFLOAT)]
-    pub norm : [f32; 3],
-    #[format(R32G32_SFLOAT)]
-    pub uv : [f32; 2],
-}
-
-enum IndexBufferProxy {
-    None,
-    U8(Vec<u8>),
-    U16(Vec<u16>),
-    U32(Vec<u32>),
-}
-
-struct ImportedMesh {
-    verts : Vec<VertexPNUV>,
-    indices : IndexBufferProxy
-}
-
-
-
-impl ImportedMesh {
-    fn new<'a, 'b, F>(reader : gltf::mesh::Reader<'a, 'b, F>) -> Self 
-        where F : Clone + Fn(gltf::Buffer<'a>) -> Option<&'b [u8]>
-    {
-        let mut mesh = ImportedMesh {
-            verts : Vec::new(),
-            indices : IndexBufferProxy::None, 
-        };
-       
-        match reader.read_indices() { 
-            Some(ReadIndices::U8(iter)) => {
-                mesh.indices = IndexBufferProxy::U8(iter.collect());
-            },
-            Some(ReadIndices::U16(iter)) => {
-                mesh.indices = IndexBufferProxy::U16(iter.collect());
-            },
-            Some(ReadIndices::U32(iter)) => {
-                mesh.indices = IndexBufferProxy::U32(iter.collect());
-            },
-            None => {
-            },
-        }
-        
-        if reader.read_positions().is_none() {
-            return mesh;
-        }
-        
-        let mut pos_iter = reader.read_positions().unwrap();
-        let num_verts = pos_iter.len();
-        
-        if num_verts == 0 {
-            return  mesh;
-        }
-        
-        let mut norm_iter = reader.read_normals();
-        let mut uv_iter = reader.read_tex_coords(0).map(|iter| iter.into_f32());
-
-        mesh.verts.reserve(num_verts);
-        
-        for _ in 0 .. num_verts {
-            let pos = pos_iter.next().unwrap();
-            let norm = match &mut norm_iter {
-                Some(iter) => iter.next().unwrap(),
-                None => [0f32, 0f32, 0f32],
-            };
-            
-            let uv = match &mut uv_iter {
-                Some(iter) => iter.next().unwrap(),
-                None => [0f32, 0f32]
-            };
-            mesh.verts.push(VertexPNUV {
-                pos, norm, uv
-            });
-        }
-    
-        mesh
-    }
-
-    fn index_size_bytes(&self) -> u8 {
-        match self.indices {
-            IndexBufferProxy::None => 0u8,
-            IndexBufferProxy::U8(_) => 1u8,
-            IndexBufferProxy::U16(_) => 2u8,
-            IndexBufferProxy::U32(_) => 4u8,
-        }
-    }
-
-    fn index_count(&self) -> usize {
-        match &self.indices {
-            IndexBufferProxy::None => 0,
-            IndexBufferProxy::U8(v) => v.len(),
-            IndexBufferProxy::U16(v) => v.len(),
-            IndexBufferProxy::U32(v) => v.len(),
-        }
-    }
-
-    fn vertex_count(&self) -> usize {
-        self.verts.len()
-    }
-}
-
-pub struct SceneMesh {
-   pub mesh_desc : Arc<MeshDesc>,
-   //vertex format? 
-   //
-   //
-}
-
-pub struct Material {
-}
+pub struct Material {}
 
 #[repr(C)]
 #[repr(align(64))]
 #[derive(BufferContents, Clone)]
 pub struct InstanceData {
-    transform : [f32; 16], // model -> world 
+    transform : [f32; 16], // model -> world А электотческт
     inverse_transform : [f32; 16], // for normals
 }
 
@@ -146,26 +34,33 @@ pub struct Instance {
     pub handle : InstanceHandle<InstanceData>,
 }
 
-pub struct Scene {
-    pub meshes : Vec<SceneMesh>,
-    pub materials : Vec<Material>,
-    pub instances : Vec<Instance>,
-    pub instance_manager : InstanceManager<InstanceData>,
+pub struct Primitive {
+    pub mesh_id : u32,
+    pub material_id : u32,
 }
 
-fn alloc_upload_staging<T>(alloc : &SubbufferAllocator, data : &[T]) -> Subbuffer<[u8]> 
-    where T : BufferContents + Clone,
-{
-    //let size = size_of::<T>() * data.len();
+pub struct Node {
+    pub name : String,
+    pub transform : na::Matrix4<f32>, 
+    pub inst_data : Option<InstanceHandle<InstanceData>>,
+    pub children : Vec<u32>,
+    pub parent : u32,
+    pub primitives : Vec<Primitive>,
+}
 
-    let staging = alloc.allocate_slice::<T>(data.len() as u64).unwrap();
-    {
-        let mut writer = staging.write().unwrap();
-        for (i, v) in data.iter().enumerate() {
-            writer[i] = v.clone();
-        }
-    }
-    staging.into_bytes()
+pub struct Scene {
+    pub meshes : Vec<mesh::SceneMesh>,
+    pub materials : Vec<Material>,
+    pub instance_manager : Arc<InstanceManager<InstanceData>>,
+    pub nodes : Vec<Option<Node>>,
+}
+
+
+struct ResImportList {
+    // mesh id -> Scene Nodes  
+    meshes : HashMap<u32, Vec<u32>>,
+    // materials 
+    // 
 }
 
 impl Scene {
@@ -173,8 +68,74 @@ impl Scene {
         Scene {
             meshes : Vec::new(),
             materials : Vec::new(),
-            instances : Vec::new(),
-            instance_manager : InstanceManager::new(render, max_instances)
+            instance_manager : Arc::new(InstanceManager::new(render, max_instances)),
+            nodes : vec![Some(
+                Node {
+                    name : String::from("scene_root"),
+                    transform : na::one(),
+                    inst_data : None,
+                    children : Vec::new(),
+                    parent : 0u32, // self id
+                    primitives : Vec::new(),
+                }
+            )],
+        }
+    }
+
+    pub fn add_node(&mut self, parent : u32, name : String, transform : na::Matrix4<f32>) -> u32 {
+        assert!(self.nodes.len() > 0 && (parent as usize) < self.nodes.len()); // at least root node must be available
+        assert!(self.nodes[parent as usize].is_some());
+        
+        let new_node = Node {
+            name, 
+            transform,
+            inst_data : None,
+            children : Vec::new(),
+            parent,
+            primitives : Vec::new(),
+        };
+
+        let new_id = match self.nodes.iter_mut().enumerate().find(|(i, v)| v.is_none()){
+            Some((i, n)) => {
+                *n = Some(new_node);
+                i as u32
+            },
+            None => {
+                self.nodes.push(Some(new_node));
+                (self.nodes.len() - 1) as u32
+            }
+        };
+        
+        self.nodes[parent as usize].as_mut().unwrap().children.push(new_id);
+        new_id
+    }
+    
+    pub fn remove_node(&mut self, id : u32) {
+
+    }
+
+    pub fn modify_node<F, R>(&mut self, id : u32, cb : F) -> R
+        where F : FnOnce(&mut Node) -> R 
+    {
+        assert!((id as usize) < self.nodes.len());
+        cb(self.nodes[id as usize].as_mut().unwrap())
+    }
+    
+    fn import_gltf_node(&mut self, parent : u32, gltf_node : gltf::Node, resources : &mut ResImportList) {
+        let transform = gltf_node.transform().matrix().into();
+        let node_id = self.add_node(parent, String::from(gltf_node.name().unwrap_or("")), transform);
+        
+        if let Some(gltf_mesh) = gltf_node.mesh() {
+            let import_mesh = gltf_mesh.index() as u32;
+            match resources.meshes.get_mut(&import_mesh) {
+                Some(node_list) => node_list.push(node_id),
+                None => { resources.meshes.insert(import_mesh, vec![node_id]); },
+            };
+
+        } 
+        
+        for child in gltf_node.children() {
+            self.import_gltf_node(node_id, child, resources);
         }
     }
 
@@ -184,107 +145,115 @@ impl Scene {
         let scene_dir = scene_path.parent().unwrap();
 
         let Gltf{document, blob} = Gltf::open(&scene_path).unwrap();
-        let buffers = gltf::import_buffers(&document, Some(&scene_dir), blob).unwrap();
-
-        let get_buffer_data = |b : gltf::buffer::Buffer| {
-            Some(buffers[b.index()].0.as_slice())
-        };
         
-        let mut imported_meshes = Vec::new();
-
-        for src_mesh in document.meshes() {
-            for prim in src_mesh.primitives() {
-                
-                
-                //prim.indices().unwrap().index()
-
-                let reader = prim.reader(get_buffer_data);
-                let mesh = ImportedMesh::new(reader);
-                imported_meshes.push(mesh);
-            }
-            break; // 1 mesh for now 
-        }
-
         let mut scene = Scene::new(render, 1024);
-        scene.meshes.reserve(imported_meshes.len());
         
-        for src_mesh in imported_meshes.iter() {
-            let vertex_stride = VertexPNUV::per_vertex().stride;
-            let index_size = src_mesh.index_size_bytes();
-            let num_indices = src_mesh.index_count() as u32;
-            let num_verts = src_mesh.verts.len() as u32;
-            let mesh = render.mesh_pool().alloc_mesh(vertex_stride, index_size, num_verts, num_indices);
-
-            scene.meshes.push(SceneMesh {
-                mesh_desc : mesh
-            });
-        }
-
-        render.run_async_commands(|cmd, alloc| {
-            for (i, src_mesh) in imported_meshes.into_iter().enumerate() {
-                let dst_mesh = &scene.meshes[i]; 
-                
-                if dst_mesh.mesh_desc.num_verts() != 0 {
-                    let staging = alloc_upload_staging(alloc, &src_mesh.verts); 
-                    
-                    cmd.copy_buffer(CopyBufferInfo {
-                        regions : [
-                            BufferCopy {
-                                src_offset : 0,
-                                dst_offset : dst_mesh.mesh_desc.vertex_byte_offset(),
-                                size : staging.size(),
-                                ..Default::default()
-                            }
-                        ].into(),
-                        ..CopyBufferInfo::buffers(staging, dst_mesh.mesh_desc.vertex_buffer().unwrap())
-                   }).unwrap();
-    
-                }
-                
-                let index_staging = match src_mesh.indices {
-                    IndexBufferProxy::None => None,
-                    IndexBufferProxy::U8(v) => Some(alloc_upload_staging(alloc, &v)),
-                    IndexBufferProxy::U16(v) => Some(alloc_upload_staging(alloc, &v)),
-                    IndexBufferProxy::U32(v) => Some(alloc_upload_staging(alloc, &v)),
-                };
-
-                if let Some(index_staging) = index_staging {
-                    cmd.copy_buffer(CopyBufferInfo {
-                        regions : [
-                            BufferCopy {
-                                dst_offset : dst_mesh.mesh_desc.index_offset_bytes(),
-                                size : index_staging.size(),
-                                ..Default::default()
-                            }
-                        ].into(),
-                        ..CopyBufferInfo::buffers(index_staging, dst_mesh.mesh_desc.index_buffer().unwrap())
-                    }).unwrap();
-
-                }
-
-            }
-        }).unwrap().wait(None).unwrap();
-        
-        let data = InstanceData {
-            transform : na::one::<na::Matrix4<f32>>().as_slice().try_into().unwrap(),
-            inverse_transform : na::one::<na::Matrix4<f32>>().as_slice().try_into().unwrap(),
+        let mut resource_list = ResImportList {
+            meshes : HashMap::new(),
         };
-        
-        for (i, _) in scene.meshes.iter().enumerate() {
-            let handle = scene.instance_manager.alloc(data.clone()); 
-            
-            scene.instances.push(Instance {
-                mesh_id : i as u32, 
-                material_id : 0,
-                handle
-            });
+
+        if let Some(g_scene) = document.default_scene() {
+            for root_node in g_scene.nodes() {
+                scene.import_gltf_node(0, root_node, &mut resource_list); 
+            }
         }
 
-        // TODO: add one instance 
+        let buffers = gltf::import_buffers(&document, Some(&scene_dir), blob).unwrap();
+        
+        let mut mesh_data = Vec::<mesh::MeshData>::new();
+        let mut mesh_gltf_index = Vec::<u32>::new();
 
-        //scene.instance_manager.alloc(val)
+        for gmesh in document.meshes() {
+            let mesh_index = gmesh.index() as u32;    
+            
+            if resource_list.meshes.get(&mesh_index).is_none() {
+                continue;
+            }
 
+            for gprim in gmesh.primitives() {
+                mesh_data.push(mesh::load_gltf_prim_data(gprim, &buffers));
+                mesh_gltf_index.push(mesh_index);
+            }
+        } 
+        
+        scene.meshes = mesh::load_meshes(render, mesh_data);
+     
+        for (i, _) in scene.meshes.iter().enumerate() {
+            let orig_index = mesh_gltf_index[i];
+            let node_ids = resource_list.meshes.get(&orig_index).unwrap();
+            for node_id in node_ids {
+                let node = scene.nodes[*node_id as usize].as_mut().unwrap();
+
+                node.primitives.push(Primitive {
+                    mesh_id : i as u32,
+                    material_id : 0,
+                });
+            }
+        }
+
+        let instance_manager = scene.instance_manager.clone();
+
+        scene.walk_nodes_mut(0, |node, id, transform| {
+            if node.primitives.len() == 0{
+                return;
+            }
+
+            let matrix_data = InstanceData {
+                transform : transform.as_slice().try_into().unwrap(),
+                inverse_transform : transform.try_inverse().unwrap().as_slice().try_into().unwrap(),
+            };
+            
+            node.inst_data = Some(instance_manager.alloc(matrix_data));
+        });
+ 
         Arc::new(scene)
+    }
+
+    fn walk_nodes_mut_internal<F>(&mut self, start_node : u32, cb : &mut F, initial_transform : &na::Matrix4<f32>) 
+        where F : FnMut(&mut Node, u32, &na::Matrix4<f32>)
+    {
+        // node 0 - root - do not change
+        assert!(self.nodes.len() > (start_node as usize) && self.nodes[start_node as usize].is_some());
+        let node = self.nodes[start_node as usize].as_mut().unwrap();
+
+        let transform = initial_transform * node.transform;
+
+        cb(node, start_node, &transform);
+
+        for i in 0 .. node.children.len() {
+            let id = self.nodes[start_node as usize].as_ref().unwrap().children[i];
+            self.walk_nodes_mut_internal(id, cb, &transform);
+        }
+    }
+    
+    pub fn walk_nodes_mut<F>(&mut self, start_node : u32, mut cb : F) 
+        where  F : FnMut(&mut Node, u32, &na::Matrix4<f32>)
+    {
+        let transform : na::Matrix4<f32> = na::one();
+        self.walk_nodes_mut_internal(start_node, &mut cb, &transform);
+    }
+
+    fn walk_nodes_internal<F>(&self, start_node : u32, cb : &mut F, initial_transform : &na::Matrix4<f32>) 
+        where F : FnMut(&Node, u32, &na::Matrix4<f32>)
+    {
+        // node 0 - root - do not change
+        assert!(self.nodes.len() > (start_node as usize) && self.nodes[start_node as usize].is_some());
+        let node = self.nodes[start_node as usize].as_ref().unwrap();
+
+        let transform = initial_transform * node.transform;
+
+        cb(node, start_node, &transform);
+
+        for id in node.children.iter() {
+            self.walk_nodes_internal(*id, cb, &transform);
+        }
+    }
+    
+    pub fn walk_nodes<F>(&self, start_node : u32, mut cb : F) 
+        where  F : FnMut(&Node, u32, &na::Matrix4<f32>)
+    {
+        let transform : na::Matrix4<f32> = na::one();
+        self.walk_nodes_internal(start_node, &mut cb, &transform);
     }
 
 }

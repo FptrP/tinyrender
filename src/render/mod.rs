@@ -144,13 +144,13 @@ impl Render {
             ctx.memory_allocator.clone(),
             SubbufferAllocatorCreateInfo {
                 memory_type_filter : MemoryTypeFilter::PREFER_HOST|MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                arena_size : 512u64 << 10u64,
+                arena_size : 2048u64 << 10u64,
                 buffer_usage : BufferUsage::TRANSFER_DST|BufferUsage::TRANSFER_SRC|BufferUsage::UNIFORM_BUFFER,
                 ..Default::default()
             });
 
-        const INDEX_POOL_SIZE : u32 = 1u32 << 20u32;
-        const VERTEX_POOL_SIZE : u32 = 4u32 << 20u32;
+        const INDEX_POOL_SIZE : u32 = 8u32 << 20u32;
+        const VERTEX_POOL_SIZE : u32 = 16u32 << 20u32;
 
         let mesh_pool = mesh_pool::MeshPool::new(
             ctx.memory_allocator.clone(), 

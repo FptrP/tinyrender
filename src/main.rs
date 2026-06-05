@@ -1,5 +1,6 @@
 extern crate nalgebra as na;
 
+use std::env::args;
 use std::{sync::Arc, time::Instant};
 use std::sync::RwLock;
 
@@ -23,6 +24,7 @@ mod triangle;
 mod scene;
 mod scene_render;
 mod camera_controller;
+mod gen_pool;
 
 #[derive(Default, Clone)]
 pub struct RenderGlobalParams {
@@ -215,6 +217,13 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
+    let args = std::env::args().collect::<Vec<_>>();
+    
+    let scene_path = if args.len() > 1  {
+        args[1].clone() 
+    } else {
+        String::from("assets/water_bottle/WaterBottle.gltf")
+    };  
 
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
@@ -231,7 +240,7 @@ fn main() {
         render_params : Arc::new(RwLock::new(RenderGlobalParams::default())),
         scene : None,
         scene_render : None,
-        scene_path : String::from("assets/water_bottle/WaterBottle.gltf"),
+        scene_path : scene_path,
     };
     event_loop.run_app(&mut app).unwrap();
 }

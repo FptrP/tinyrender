@@ -18,6 +18,8 @@ layout (set = 0, binding = 1) uniform InstanceConsts {
   mat4 inverse_model;
 } instConsts;
 
+//layout (set = 0, binding = 3) uniform sampler2D temp_tex;
+
 void main() {
   float k = max(dot(in_norm, normalize(vec3(1, -1, 1))), 0.1);  
   out_color = vec4(pow(k * vec3(in_uv, 1), vec3(1.0/2.2)), 1);

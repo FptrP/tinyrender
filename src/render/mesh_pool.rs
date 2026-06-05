@@ -119,8 +119,11 @@ impl BufferPool {
     // returns offset in elements on successfull allocation
     fn try_allocate(&mut self, elem_size : u32, num_elems : u32) -> Option<u32> {
         
+
         let byte_size = elem_size * num_elems;
         assert!(byte_size > 0);
+        
+        //println!("Alloc {}Mb", (byte_size >> 10) as f64 / 1024.0);
 
         let res = self.free_list.iter().enumerate().filter(|(i, r)| {
             let aligned_start = (r.start + elem_size - 1u32)/elem_size * elem_size; 
@@ -146,7 +149,7 @@ impl BufferPool {
             
             if alloc_end < r.end {
                 //Some(alloc_end..r.end)
-                self.free_list.insert(index, r.start..aligned_start);
+                self.free_list.insert(index, alloc_end..r.end);
             }
             
             
@@ -319,7 +322,7 @@ impl MeshPool {
 
         let index_offset = if has_indices {
             pool.index_pool.try_allocate(index_stride as u32, index_count)
-                .expect("Index buffer - out of memory")
+                .expect(&format!("Index buffer - out of memory - {}", (index_stride as u32) * index_count))
         } else {
             0u32
         };

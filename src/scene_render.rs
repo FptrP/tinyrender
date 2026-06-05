@@ -21,6 +21,7 @@ use vulkano::descriptor_set::DescriptorSet;
 use vulkano::descriptor_set::WriteDescriptorSet;
 use vulkano::descriptor_set::layout;
 use vulkano::descriptor_set::layout::DescriptorSetLayout;
+use vulkano::descriptor_set::layout::DescriptorSetLayoutBinding;
 use vulkano::descriptor_set::layout::DescriptorType;
 use vulkano::device::Device;
 use vulkano::memory::allocator::AllocationCreateInfo;
@@ -60,12 +61,19 @@ struct FrameConsts {
     inverse_view : [f32; 16],
 }
 
+struct Drawcall {
+    mesh_id : u32, 
+    instance_mat_offset : u32, 
+    mat_id : u32,
+}
+
 struct SceneShared {
     pipeline : Arc<GraphicsPipeline>,
     scene : Arc<Scene>,
     frame_consts : Vec<Subbuffer<FrameConsts>>, // ring buffer
     frame_sets : Vec<Arc<DescriptorSet>>,
     current_consts : Mutex<FrameConsts>,
+    drawcalls : Mutex<Vec<Drawcall>>,
 }
 
 pub struct SceneRenderer {
@@ -83,7 +91,8 @@ impl SceneRenderer {
         
         let shared_state = Arc::new(SceneShared {
             pipeline, scene, frame_consts, frame_sets, 
-            current_consts : Mutex::new(Default::default())
+            current_consts : Mutex::new(Default::default()),
+            drawcalls : Mutex::new(Vec::with_capacity(1000)),
         });
 
         let color_pass_node = Self::create_subpass(render, shared_state.clone());
@@ -104,6 +113,27 @@ impl SceneRenderer {
         lock.view_projection = (projection * view).as_slice().try_into().unwrap();
         lock.view = view.as_slice().try_into().unwrap();
         lock.inverse_view = view.try_inverse().unwrap().as_slice().try_into().unwrap();
+    
+        
+        {
+            let mut drawcalls = self.shared_state.drawcalls.lock().unwrap();
+            
+            drawcalls.clear();
+
+            self.shared_state.scene.walk_nodes(0, |node, _id, _transform| {
+                if let Some(inst) = node.inst_data.as_ref() {
+                    let inst_offset = inst.offset_bytes() as u32;
+                    for prim in node.primitives.iter() {            
+                    
+                        drawcalls.push(Drawcall {
+                            mesh_id : prim.mesh_id,
+                            instance_mat_offset : inst_offset,
+                            mat_id : prim.material_id
+                        });
+                    }
+                }
+            });
+        }
     }
     
     fn create_subpass(render : &Render, shared_state : Arc<SceneShared>) -> SubpassHandle {
@@ -124,8 +154,10 @@ impl SceneRenderer {
             let mut bound_vbuf : Option<u32> = None;
             let mut bound_index : Option<u8> = None; // 
             
-            for instance in shared_state.scene.instances.iter() {
-                let mesh_id = instance.mesh_id;
+            let drawcalls = shared_state.drawcalls.lock().unwrap();
+
+            for drawcall in drawcalls.iter() {
+                let mesh_id = drawcall.mesh_id;
                 
                 let mesh = &shared_state.scene.meshes[mesh_id as usize].mesh_desc;
             
@@ -149,7 +181,7 @@ impl SceneRenderer {
                     bound_index = Some(mesh.index_size_bytes());
                 }
 
-                let offset = instance.handle.offset_bytes() as u32;
+                let offset = drawcall.instance_mat_offset;
                 let desc_set_offset = desc_set.clone().offsets([offset]);
                 cmd.bind_descriptor_sets(vulkano::pipeline::PipelineBindPoint::Graphics, shared_state.pipeline.layout().clone(), 0, desc_set_offset).unwrap();
                 
@@ -194,7 +226,7 @@ impl SceneRenderer {
         
         let subpass = render.get_subpass(RenderSubpass::Normal).unwrap();
         
-        let vertex_input_state = crate::scene::VertexPNUV::per_vertex()
+        let vertex_input_state = crate::scene::mesh::VertexPNUV::per_vertex()
             .definition(&vshader.entry_point("main").unwrap())
             .unwrap();
 
